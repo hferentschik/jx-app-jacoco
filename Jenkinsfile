@@ -34,35 +34,33 @@ pipeline {
         steps {
           dir ('/home/jenkins/go/src/github.com/jenkins-x-apps/jx-app-jacoco') {
             git 'https://github.com/jenkins-x-apps/jx-app-jacoco'
-          }
-          dir ('/home/jenkins/go/src/github.com/jenkins-x-apps/jx-app-jacoco/charts/jx-app-jacoco') {
-              // ensure we're not on a detached head
-              sh "git checkout master"
-              // until we switch to the new kubernetes / jenkins credential implementation use git credentials store
-              sh "git config --global credential.helper store"
 
-              sh "jx step git credentials"
-          }
-          dir ('/home/jenkins/go/src/github.com/jenkins-x-apps/jx-app-jacoco') {
-            // so we can retrieve the version in later steps
+            // ensure we're not on a detached head
+            sh "git checkout master"
+
+            def status = sh(returnStatus: true, script: "git log -1 --pretty=%B | grep -q '^Release version v[0-9\.]\+$'")
+            if (status == 0) {
+              echo 'Skipping stage since dealing with a release commit.'
+              currentBuild.result = 'SUCCESS'
+              return
+            }
+
+            // until we switch to the new kubernetes / jenkins credential implementation use git credentials store
+            sh "git config --global credential.helper store"
+            sh "jx step git credentials"
+
+            // set release version
             sh "echo \$(jx-release-version) > VERSION"
-          }
-          dir ('/home/jenkins/go/src/github.com/jenkins-x-apps/jx-app-jacoco/charts/jx-app-jacoco') {
-            sh "make tag"
-          }
-          dir ('/home/jenkins/go/src/github.com/jenkins-x-apps/jx-app-jacoco') {
+
+            // make sure all is good to go
             sh "make linux test check"
-            sh 'export VERSION=`cat VERSION` && make skaffold-build'
+
+            // create release branch
+            sh "make release-branch"
+
+            sh "make skaffold-build VERSION=\$(cat VERSION)"
             sh "jx step post build --image $DOCKER_REGISTRY/$ORG/$APP_NAME:\$(cat VERSION)"
-          }
-        }
-      }
-      stage('Promote') {
-        when {
-          branch 'master'
-        }
-        steps {
-          dir ('/home/jenkins/go/src/github.com/jenkins-x-apps/jx-app-jacoco') {
+
             // release the docker image
             sh 'docker build -t docker.io/$ORG/$APP_NAME:\$(cat VERSION) .'
             sh 'docker push docker.io/$ORG/$APP_NAME:\$(cat VERSION)'
